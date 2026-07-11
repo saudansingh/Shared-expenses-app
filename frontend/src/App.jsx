@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import BASE_URL from './api';
 
 export default function App() {
   const API_BASE = "/api";
@@ -15,7 +16,7 @@ export default function App() {
 
 const [initStatus, setInitStatus] = useState("");
 
-import BASE_URL from './api'; // Adjust the import path to match your file structure
+ // Adjust the import path to match your file structure
 
 const handleInitializeGroup = async () => {
   try {
