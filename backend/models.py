@@ -1,97 +1,84 @@
-from sqlalchemy import Column, Integer, String, Float, ForeignKey, Date, DateTime, Numeric
+from sqlalchemy import Column, Integer, String, ForeignKey, Date, Boolean, Numeric
 from sqlalchemy.orm import relationship
-from database import Base
-import datetime
+
+try:
+    from .database import Base
+except ImportError:  # pragma: no cover - fallback for direct execution
+    from database import Base
+
 
 class User(Base):
     __tablename__ = "users"
-
     id = Column(Integer, primary_key=True, index=True)
-    username = Column(String, unique=True, index=True, nullable=False)
-    hashed_password = Column(String, nullable=False)  # For Login Module Requirement
+    username = Column(String, unique=True, index=True)
+    hashed_password = Column(String)
 
-    # Relationships
-    memberships = relationship("GroupMembership", back_populates="user")
-    splits = relationship("ExpenseSplit", back_populates="user")
+    memberships = relationship("GroupMembership", back_populates="user", cascade="all, delete-orphan")
+    expenses_paid = relationship("Expense", back_populates="payer", cascade="all, delete-orphan")
+    expense_splits = relationship("ExpenseSplit", back_populates="user", cascade="all, delete-orphan")
+
 
 class Group(Base):
     __tablename__ = "groups"
-
     id = Column(Integer, primary_key=True, index=True)
-    name = Column(String, nullable=False)
+    name = Column(String, index=True)
 
-    # Relationships
-    memberships = relationship("GroupMembership", back_populates="group")
-    expenses = relationship("Expense", back_populates="group")
-    settlements = relationship("Settlement", back_populates="group")
+    memberships = relationship("GroupMembership", back_populates="group", cascade="all, delete-orphan")
+    expenses = relationship("Expense", back_populates="group", cascade="all, delete-orphan")
+    settlements = relationship("Settlement", back_populates="group", cascade="all, delete-orphan")
+
 
 class GroupMembership(Base):
-    """
-    Tracks who belongs to which group and WHEN.
-    Answers Sam's complaint: Mid-April arrival means no March expenses.
-    Answers Meera's data: Left end of March, no April charges.
-    """
     __tablename__ = "group_memberships"
-
     id = Column(Integer, primary_key=True, index=True)
-    group_id = Column(Integer, ForeignKey("groups.id"), nullable=False)
-    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
-    
-    # Strict temporal tracking for dynamic membership changes
-    joined_at = Column(Date, nullable=False, default=datetime.date(2026, 2, 1))
-    left_at = Column(Date, nullable=True)  # Null means they are still in the flat
+    group_id = Column(Integer, ForeignKey("groups.id"))
+    user_id = Column(Integer, ForeignKey("users.id"))
+    joined_at = Column(Date)
+    left_at = Column(Date, nullable=True)
 
     group = relationship("Group", back_populates="memberships")
     user = relationship("User", back_populates="memberships")
 
+
 class Expense(Base):
     __tablename__ = "expenses"
-
     id = Column(Integer, primary_key=True, index=True)
-    group_id = Column(Integer, ForeignKey("groups.id"), nullable=False)
-    description = Column(String, nullable=False)
-    paid_by_id = Column(Integer, ForeignKey("users.id"), nullable=False)
-    
-    # Currency conversions (Addresses Priya's USD vs INR issue)
-    original_amount = Column(Numeric(10, 2), nullable=False)
-    original_currency = Column(String(3), nullable=False, default="INR")
-    amount_in_inr = Column(Numeric(10, 2), nullable=False)  # Unified calculation base
-    
-    expense_date = Column(Date, nullable=False)
-    split_type = Column(String, nullable=False)  # equal, unequal, percentage, share
-    notes = Column(String, nullable=True)
+    group_id = Column(Integer, ForeignKey("groups.id"))
+    paid_by_id = Column(Integer, ForeignKey("users.id"))
+    description = Column(String)
+    amount_in_inr = Column(Numeric(12, 2), default=0)
+    original_amount = Column(Numeric(12, 2), default=0)
+    original_currency = Column(String, default="INR")
+    exchange_rate_to_inr = Column(Numeric(10, 4), default=1)
+    notes = Column(String)
+    is_settlement = Column(Boolean, default=False)
+    split_type = Column(String)
+    date = Column(Date)
 
     group = relationship("Group", back_populates="expenses")
+    payer = relationship("User", back_populates="expenses_paid")
     splits = relationship("ExpenseSplit", back_populates="expense", cascade="all, delete-orphan")
 
-class ExpenseSplit(Base):
-    """
-    Itemized breakdown per person. 
-    Answers Rohan's request: "No magic numbers, show me exactly what makes up my balance."
-    """
-    __tablename__ = "expense_splits"
 
+class ExpenseSplit(Base):
+    __tablename__ = "expense_splits"
     id = Column(Integer, primary_key=True, index=True)
-    expense_id = Column(Integer, ForeignKey("expenses.id", ondelete="CASCADE"), nullable=False)
-    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
-    owed_amount = Column(Numeric(10, 2), nullable=False)  # Calculated share in INR
+    expense_id = Column(Integer, ForeignKey("expenses.id"))
+    user_id = Column(Integer, ForeignKey("users.id"))
+    owed_amount = Column(Numeric(12, 2), default=0)
 
     expense = relationship("Expense", back_populates="splits")
-    user = relationship("User", back_populates="splits")
+    user = relationship("User", back_populates="expense_splits")
+
 
 class Settlement(Base):
-    """
-    Logs actual payments between flatmates.
-    Addresses Aisha's request for clean net numbers and handles logged settlements.
-    """
     __tablename__ = "settlements"
-
     id = Column(Integer, primary_key=True, index=True)
-    group_id = Column(Integer, ForeignKey("groups.id"), nullable=False)
-    payer_id = Column(Integer, ForeignKey("users.id"), nullable=False)  # Person paying
-    payee_id = Column(Integer, ForeignKey("users.id"), nullable=False)  # Person receiving
-    amount = Column(Numeric(10, 2), nullable=False)
-    settlement_date = Column(Date, nullable=False)
-    notes = Column(String, nullable=True)
+    group_id = Column(Integer, ForeignKey("groups.id"))
+    payer_id = Column(Integer, ForeignKey("users.id"))
+    payee_id = Column(Integer, ForeignKey("users.id"))
+    amount = Column(Numeric(12, 2), default=0)
+    settlement_date = Column(Date)
+    notes = Column(String)
 
     group = relationship("Group", back_populates="settlements")

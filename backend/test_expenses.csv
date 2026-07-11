@@ -1,0 +1,13 @@
+date,description,paid_by,amount,currency,split_type,split_with,notes
+2026-02-10,Groceries,Aisha,1200,INR,equal,Rohan;Priya;Meera,Weekly groceries
+2026-02-12,Movie tickets,Rohan,800,INR,equal,Aisha;Priya,Cinema night
+2026-02-15,Dinner,Priya,3000,INR,equal,Aisha;Rohan;Meera,Restaurant dinner
+2026-02-20,Electricity bill,Aisha,2400,INR,equal,Rohan;Priya;Meera,Monthly utility
+2026-03-05,Groceries,Rohan,1500,INR,equal,Aisha;Priya;Meera,Weekly shopping
+2026-03-10,Dinner,Aisha,1800,INR,equal,Rohan;Priya,Shared meal
+2026-03-15,Internet,Priya,800,INR,equal,Aisha;Rohan;Meera,Monthly internet
+2026-03-20,Gas bill,Meera,600,INR,equal,Aisha;Rohan;Priya;Meera,Cooking gas
+2026-03-25,Aisha paid Rohan,Rohan,2000,INR,settlement,Aisha,Partial settlement
+2026-04-05,Groceries,Aisha,1300,INR,equal,Rohan;Priya;Sam,Weekly groceries
+2026-04-10,Dinner,Sam,2500,INR,equal,Aisha;Rohan;Priya,Welcome dinner for Sam
+2026-04-15,Electricity,Rohan,2400,INR,equal,Aisha;Priya;Sam,Monthly utility

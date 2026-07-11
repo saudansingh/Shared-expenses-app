@@ -13,6 +13,28 @@ export default function App() {
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState("");
 
+const [initStatus, setInitStatus] = useState("");
+
+const handleInitializeGroup = async () => {
+  try {
+    setInitStatus("loading");
+    // Vite proxy auto-strips /api and targets http://127.0.0.1:8000/groups/initialize
+    const response = await fetch('/api/groups/initialize', { method: 'POST' });
+    const data = await response.json();
+    
+    if (data.status === "success") {
+      setInitStatus("success");
+      alert(data.message);
+    } else {
+      setInitStatus("error");
+      alert("Error initializing database layout: " + data.message);
+    }
+  } catch (err) {
+    setInitStatus("error");
+    console.error("Initialization call failed:", err);
+  }
+};
+
   // Auto-fetch groups on layout load
   useEffect(() => {
     fetchGroups();
@@ -302,20 +324,52 @@ export default function App() {
                 />
               </div>
 
+
+
+              <div className="p-4 border border-dashed rounded bg-slate-900 border-slate-700">
+                <div className="flex items-center justify-between mb-4">
+                  <h3 className="text-lg font-bold text-sky-400">Database Core Configuration</h3>
+                  
+                  <button 
+                    onClick={handleInitializeGroup}
+                    className={`px-4 py-2 font-semibold text-xs uppercase tracking-wider rounded transition-all duration-150 ${
+                      initStatus === "success" 
+                        ? "bg-emerald-600 text-white cursor-default" 
+                        : "bg-sky-600 hover:bg-sky-500 text-white font-medium shadow-md shadow-sky-900/20"
+                    }`}
+                    disabled={initStatus === "loading" || initStatus === "success"}
+                  >
+                    {initStatus === "loading" && "🔄 Building Schema..."}
+                    {initStatus === "success" && "✅ Infrastructure Locked"}
+                    {initStatus !== "loading" && initStatus !== "success" && "⚡ Initialize Flat Group Infrastructure"}
+                  </button>
+                </div>
+  
+  <p className="text-xs text-slate-400 mb-2">
+    Step 1: Execute infrastructure mapping initialization to pre-seed the target relational tables.
+  </p>
+</div>
+
+
+              
+
+
+
+
               {/* Dynamic Staging Report Table Matrix */}
               {stagedData && (
                 <div className="bg-white rounded-xl shadow-sm border border-slate-100 overflow-hidden">
                   <div className="bg-slate-900 px-6 py-4 flex flex-col sm:flex-row justify-between items-start sm:items-center text-white space-y-3 sm:space-y-0">
                     <div>
                       <h4 className="text-sm font-black tracking-wide text-indigo-400">MEERA'S PIPELINE STAGING SCREEN</h4>
-                      <p className="text-xs text-slate-400 mt-0.5">Review, override, and explicitly authorize row inputs.</p>
+                      <p className="text-xs text-slate-400 mt-0.5">{stagedData.records.length} record(s) staged. Review, override, and explicitly authorize row inputs.</p>
                     </div>
                     <button onClick={commitApprovedDataToDb} className="w-full sm:w-auto bg-emerald-500 hover:bg-emerald-600 px-5 py-2 rounded text-xs font-black tracking-wide transition-all uppercase shadow-md">
                       Authorize Updates & Write to DB
                     </button>
                   </div>
 
-                  <div className="overflow-x-auto max-h-[600px] overflow-y-auto">
+                  <div className="overflow-x-auto" style={{maxHeight: '600px', overflowY: 'auto'}}>
                     <table className="w-full text-left text-xs border-collapse">
                       <thead className="sticky top-0 bg-slate-100 shadow-sm border-b z-10 text-slate-500 font-bold uppercase">
                         <tr>

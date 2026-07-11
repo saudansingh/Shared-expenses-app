@@ -1,13 +1,11 @@
-# DECISIONS.md - Strategic Technology Decisions & Evaluation Trade-offs
+# DECISIONS.md
 
-### 1. Choosing the Application Stack
-- **Option Considered:** Node.js/Express vs. Python/FastAPI.
-- **Decision:** Python/FastAPI. FastAPI's native Pydantic validation allows us to intercept messy incoming CSV anomalies with minimal overhead. Python also provides robust precision data types like `Decimal`, which are crucial for financial accounting engines.
+## Architecture decisions
+- Python/FastAPI was chosen for the backend because it offers clear validation, strong decimal handling, and quick API development.
+- SQLAlchemy ORM models were used to keep the schema clear and portable while still supporting SQLite for local development.
+- The importer uses a two-step staging model so anomalies are visible and reviewable before any database writes occur.
 
-### 2. Financial Precision Model (Floating-Point vs Fixed Decimal Layouts)
-- **Option Considered:** Standard JavaScript/Python IEEE 754 float types vs. Fixed-Point Decimals.
-- **Decision:** Fixed-Point `Decimal` library utilizing `ROUND_HALF_UP` mapping. Floating-point binary conversions introduce tiny fractional errors over multiple calculations. Standardizing all database interactions on fixed two-digit decimals ensures all ledgers balance perfectly to zero.
-
-### 3. CSV Ingestion Architecture (Automated Assumptions vs Two-Step Staging Screens)
-- **Option Considered:** Processing the CSV silently on upload vs providing an interactive UI staging screen.
-- **Decision:** Interactive UI staging screen. This approach directly satisfies Meera's demand for data control. The app parses the file and maps out anomalies using an explicit schema, allowing the user to inspect, modify, and authorize transactions before writing them to the production database.
+## Rationale
+- Fixed-point Decimal values are used for financial calculations to avoid floating-point drift.
+- Temporal membership rules are stored in the database rather than hard-coded into the UI so they remain auditable and easy to evolve.
+- Expense splits are stored as atomic rows to preserve full auditability for itemized balances.

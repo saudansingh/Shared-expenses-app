@@ -1,20 +1,24 @@
 import jwt
 import datetime
 from decimal import Decimal, ROUND_HALF_UP
-from fastapi import FastAPI, Depends, HTTPException, status, UploadFile, File
+from fastapi import FastAPI, Depends, HTTPException, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 from typing import List
 
-import models, schemas, database, importer
 from passlib.context import CryptContext
+
+try:
+    from . import models, schemas, database, importer
+except ImportError:  # pragma: no cover - fallback for direct execution
+    import models, schemas, database, importer
 
 # Security Configuration for the Login Module requirement
 SECRET_KEY = "SPREETAIL_PLACEMENT_DRIVE_TOKEN_SECRET"
 ALGORITHM = "HS256"
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
-# Auto-initialize database tables on execution
+# Auto-initialize database tables on execution using core module binding
 database.Base.metadata.create_all(bind=database.engine)
 
 app = FastAPI(title="Shared Expenses App - Spreetail Intern Assignment")
@@ -59,12 +63,9 @@ def create_group(payload: schemas.GroupCreate, db: Session = Depends(database.ge
     db.commit()
     db.refresh(group)
     
-    # Auto-populate standard flatmates with direct dummy string hashes
-    # This completely bypasses the broken passlib/bcrypt library loop on Python 3.13
     for member_name, timelines in importer.VALID_MEMBERS.items():
         user = db.query(models.User).filter(models.User.username == member_name).first()
         if not user:
-            # Hardcoded safe mock hash string to prevent any runtime calculations
             dummy_hash = "$2b$12$eImiTXuWVcYl6XW/Wv2Rde9G/eF7XhXz/cWjC8N5h7EwFvFqB5G8."
             user = models.User(username=member_name, hashed_password=dummy_hash)
             db.add(user)
@@ -88,10 +89,6 @@ def list_groups(db: Session = Depends(database.get_db)):
 # --- THE SMART IMPORTER LAYER ---
 @app.post("/importer/stage")
 async def stage_csv_upload(file: UploadFile = File(...)):
-    """
-    Ingests the file and reads it without saving directly to the DB.
-    Surfaces all 12+ anomalies for user confirmation.
-    """
     filename_lower = file.filename.lower()
     if not (filename_lower.endswith('.csv') or '.csv' in filename_lower):
         raise HTTPException(
@@ -112,9 +109,6 @@ async def stage_csv_upload(file: UploadFile = File(...)):
 
 @app.post("/importer/finalize")
 def finalize_import_to_database(payload: schemas.FinalizeImportPayload, db: Session = Depends(database.get_db)):
-    """
-    Executes the persistent database operations only after Meera's validation approval.
-    """
     group = db.query(models.Group).filter(models.Group.id == payload.group_id).first()
     if not group:
         raise HTTPException(status_code=404, detail="Target group reference not found.")
@@ -123,82 +117,99 @@ def finalize_import_to_database(payload: schemas.FinalizeImportPayload, db: Sess
     imported_settlements_count = 0
 
     for rec in payload.approved_records:
-        if not rec.paid_by or rec.amount_in_inr == 0:
+        rec_dict = rec.dict() if hasattr(rec, "dict") else dict(rec)
+
+        raw_payer = rec_dict.get("paid_by") or rec_dict.get("paidby") or rec_dict.get("payer")
+        raw_amount = rec_dict.get("amount_in_inr") or rec_dict.get("amount") or 0
+        raw_date = rec_dict.get("date")
+        raw_desc = rec_dict.get("description", "")
+        raw_notes = rec_dict.get("notes", "")
+        raw_currency = rec_dict.get("currency", "INR")
+        raw_split_type = rec_dict.get("split_type", "equal")
+        raw_split_with = rec_dict.get("split_with", [])
+        raw_split_details = rec_dict.get("split_details", "")
+
+        if not raw_payer or float(raw_amount) == 0:
             continue
-            
-        payer = db.query(models.User).filter(models.User.username == rec.paid_by).first()
+
+        payer_name = str(raw_payer).strip().split()[0].capitalize()
+        payer = db.query(models.User).filter(models.User.username == payer_name).first()
         if not payer:
             continue
 
         try:
-            record_date = datetime.datetime.strptime(rec.date, "%Y-%m-%d").date()
-        except:
+            record_date = datetime.datetime.strptime(str(raw_date), "%Y-%m-%d").date()
+        except Exception:
             record_date = datetime.date(2026, 3, 1)
 
-        if rec.is_settlement or rec.split_type == "settlement":
-            if rec.split_with:
-                payee_name = rec.split_with[0]
-                payee = db.query(models.User).filter(models.User.username == payee_name).first()
-                if payee:
-                    settlement = models.Settlement(
-                        group_id=group.id,
-                        payer_id=payer.id,
-                        payee_id=payee.id,
-                        amount=Decimal(str(rec.amount_in_inr)),
-                        settlement_date=record_date,
-                        notes=f"[Imported] {rec.notes}"
-                    )
-                    db.add(settlement)
-                    imported_settlements_count += 1
+        is_settlement_flag = rec_dict.get("is_settlement", False) or raw_split_type == "settlement" or "settle" in str(raw_desc).lower()
+
+        if is_settlement_flag:
+            payee_name = ""
+            if raw_split_with:
+                payee_name = str(raw_split_with[0]).strip().split()[0].capitalize()
+            payee = db.query(models.User).filter(models.User.username == payee_name).first() if payee_name else None
+            if payee:
+                settlement = models.Settlement(
+                    group_id=group.id,
+                    payer_id=payer.id,
+                    payee_id=payee.id,
+                    amount=Decimal(str(raw_amount)),
+                    settlement_date=record_date,
+                    notes=f"[Imported] {raw_notes}"
+                )
+                db.add(settlement)
+                imported_settlements_count += 1
             continue
 
         expense = models.Expense(
             group_id=group.id,
-            description=rec.description,
+            description=raw_desc,
             paid_by_id=payer.id,
-            original_amount=Decimal(str(rec.amount)),
-            original_currency=rec.currency,
-            amount_in_inr=Decimal(str(rec.amount_in_inr)),
-            expense_date=record_date,
-            split_type=rec.split_type,
-            notes=rec.notes
+            original_amount=Decimal(str(rec_dict.get("amount", raw_amount))),
+            original_currency=raw_currency,
+            amount_in_inr=Decimal(str(raw_amount)),
+            exchange_rate_to_inr=Decimal("83.50") if str(raw_currency).upper() == "USD" else Decimal("1.00"),
+            date=record_date,
+            split_type=raw_split_type,
+            notes=raw_notes,
         )
         db.add(expense)
         db.flush()
 
         shares_map = {}
-        if rec.split_type == "percentage" and rec.split_details:
+        if raw_split_type == "percentage" and raw_split_details:
             import re
-            for u_name, pct in re.findall(r"([A-Za-z]+)\s*(\d+)%", rec.split_details):
+            for u_name, pct in re.findall(r"([A-Za-z]+)\s*(\d+)%", raw_split_details):
                 shares_map[importer.normalize_name(u_name)] = Decimal(pct) / Decimal("100")
-        elif rec.split_type == "share" and rec.split_details:
+        elif raw_split_type == "share" and raw_split_details:
             import re
             total_shares = Decimal("0")
             raw_shares = {}
-            for u_name, sh in re.findall(r"([A-Za-z]+)\s*(\d+)", rec.split_details):
+            for u_name, sh in re.findall(r"([A-Za-z]+)\s*(\d+)", raw_split_details):
                 s_val = Decimal(sh)
                 raw_shares[importer.normalize_name(u_name)] = s_val
                 total_shares += s_val
             if total_shares > 0:
                 for u_name, sh in raw_shares.items():
                     shares_map[u_name] = sh / total_shares
-        
-        if not shares_map and rec.split_with:
-            share_ratio = Decimal("1") / Decimal(len(rec.split_with))
-            for u_name in rec.split_with:
+
+        if not shares_map and raw_split_with:
+            share_ratio = Decimal("1") / Decimal(len(raw_split_with))
+            for u_name in raw_split_with:
                 shares_map[importer.normalize_name(u_name)] = share_ratio
 
         for target_user_name, ratio in shares_map.items():
             target_user = db.query(models.User).filter(models.User.username == target_user_name).first()
             if target_user:
-                owed_value = (expense.amount_in_inr * ratio).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+                with_value = (expense.amount_in_inr * ratio).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
                 split_record = models.ExpenseSplit(
                     expense_id=expense.id,
                     user_id=target_user.id,
-                    owed_amount=owed_value
+                    owed_amount=with_value,
                 )
                 db.add(split_record)
-        
+
         imported_expenses_count += 1
 
     db.commit()
@@ -210,9 +221,6 @@ def finalize_import_to_database(payload: schemas.FinalizeImportPayload, db: Sess
 # --- BALANCES & AUDIT BALANCING LOGIC ---
 @app.get("/groups/{group_id}/balances")
 def get_group_financial_analytics(group_id: int, db: Session = Depends(database.get_db)):
-    """
-    Computes balances and generates both Aisha's Simplified View and Rohan's Itemized Audit Log.
-    """
     users = db.query(models.User).all()
     net_balances = {u.id: Decimal("0.00") for u in users}
     user_name_map = {u.id: u.username for u in users}
@@ -220,56 +228,60 @@ def get_group_financial_analytics(group_id: int, db: Session = Depends(database.
     expenses = db.query(models.Expense).filter(models.Expense.group_id == group_id).all()
     for exp in expenses:
         net_balances[exp.paid_by_id] += exp.amount_in_inr
-        for split in exp.splits:
-            net_balances[split.user_id] -= split.owed_amount
+        if hasattr(exp, "splits") and exp.splits:
+            for split in exp.splits:
+                net_balances[split.user_id] -= split.owed_amount
 
-    settlements = db.query(models.Settlement).filter(models.Settlement.group_id == group_id).all()
-    for setl in settlements:
-        net_balances[setl.payer_id] -= setl.amount
-        net_balances[setl.payee_id] += setl.amount
+    if hasattr(models, "Settlement"):
+        settlements = db.query(models.Settlement).filter(models.Settlement.group_id == group_id).all()
+        for setl in settlements:
+            net_balances[setl.payer_id] -= setl.amount
+            net_balances[setl.payee_id] += setl.amount
 
     audit_trail = {}
     for uid, name in user_name_map.items():
         items = []
-        splits_owed = db.query(models.ExpenseSplit).filter(models.ExpenseSplit.user_id == uid).all()
-        for s in splits_owed:
-            exp = s.expense
-            if exp.group_id == group_id:
-                items.append({
-                    "date": str(exp.expense_date),
-                    "description": exp.description,
-                    "type": "OWED_SHARE",
-                    "amount": float(s.owed_amount),
-                    "context": f"Paid by {user_name_map[exp.paid_by_id]}"
-                })
+        if hasattr(models, "ExpenseSplit"):
+            splits_owed = db.query(models.ExpenseSplit).filter(models.ExpenseSplit.user_id == uid).all()
+            for s in splits_owed:
+                exp = s.expense
+                if exp and exp.group_id == group_id:
+                    items.append({
+                        "date": str(exp.date),  # ✅ FIXED: mapped from exp.expense_date to exp.date
+                        "description": exp.description,
+                        "type": "OWED_SHARE",
+                        "amount": float(s.owed_amount),
+                        "context": f"Paid by {user_name_map[exp.paid_by_id]}"
+                    })
         paid_expenses = db.query(models.Expense).filter(models.Expense.group_id == group_id, models.Expense.paid_by_id == uid).all()
         for exp in paid_expenses:
-            for s in exp.splits:
-                if s.user_id != uid:
-                    items.append({
-                        "date": str(exp.expense_date),
-                        "description": exp.description,
-                        "type": "CREDIT_DUE",
-                        "amount": float(s.owed_amount),
-                        "context": f"Owed by {user_name_map[s.user_id]}"
-                    })
+            if hasattr(exp, "splits") and exp.splits:
+                for s in exp.splits:
+                    if s.user_id != uid:
+                        items.append({
+                            "date": str(exp.date),  # ✅ FIXED: mapped from exp.expense_date to exp.date
+                            "description": exp.description,
+                            "type": "CREDIT_DUE",
+                            "amount": float(s.owed_amount),
+                            "context": f"Owed by {user_name_map[s.user_id]}"
+                        })
         audit_trail[name] = items
 
     debtors = []
-    creditors = []
+    text_creditors = []
     for uid, bal in net_balances.items():
         rounded_bal = bal.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
         if rounded_bal < 0:
             debtors.append({"name": user_name_map[uid], "balance": abs(rounded_bal)})
         elif rounded_bal > 0:
-            creditors.append({"name": user_name_map[uid], "balance": rounded_bal})
+            text_creditors.append({"name": user_name_map[uid], "balance": rounded_bal})
 
     simplified_transactions = []
     d_idx, c_idx = 0, 0
 
-    while d_idx < len(debtors) and c_idx < len(creditors):
+    while d_idx < len(debtors) and c_idx < len(text_creditors):
         debtor = debtors[d_idx]
-        creditor = creditors[c_idx]
+        creditor = text_creditors[c_idx]
 
         settle_amount = min(debtor["balance"], creditor["balance"])
         if settle_amount > 0:
@@ -292,3 +304,41 @@ def get_group_financial_analytics(group_id: int, db: Session = Depends(database.
         "aisha_simplified_settlements": simplified_transactions,
         "rohan_itemized_audit_trail": audit_trail
     }
+
+@app.post("/groups/initialize")
+def initialize_system_group_infrastructure(db: Session = Depends(database.get_db)):
+    try:
+        group = db.query(models.Group).filter(models.Group.name == "Flat 404 Shared Spaces Group").first()
+        if not group:
+            group = models.Group(id=1, name="Flat 404 Shared Spaces Group")
+            db.add(group)
+            db.commit()
+            db.refresh(group)
+
+        for member_name, timelines in importer.VALID_MEMBERS.items():
+            user = db.query(models.User).filter(models.User.username == member_name).first()
+            if not user:
+                dummy_hash = "$2b$12$eImiTXuWVcYl6XW/Wv2Rde9G/eF7XhXz/cWjC8N5h7EwFvFqB5G8."
+                user = models.User(username=member_name, hashed_password=dummy_hash)
+                db.add(user)
+                db.commit()
+                db.refresh(user)
+
+            existing_membership = db.query(models.GroupMembership).filter(
+                models.GroupMembership.group_id == group.id,
+                models.GroupMembership.user_id == user.id
+            ).first()
+            
+            if not existing_membership:
+                joined_date = datetime.datetime.strptime(timelines["joined"], "%Y-%m-%d").date()
+                left_date = datetime.datetime.strptime(timelines["left"], "%Y-%m-%d").date() if timelines["left"] else None
+                
+                membership = models.GroupMembership(
+                    group_id=group.id, user_id=user.id, joined_at=joined_date, left_at=left_date
+                )
+                db.add(membership)
+        
+        db.commit()
+        return {"status": "success", "message": "Flat 404 Shared Spaces infrastructure successfully initialized."}
+    except Exception as e:
+        return {"status": "error", "message": f"Initialization failed: {str(e)}"}
