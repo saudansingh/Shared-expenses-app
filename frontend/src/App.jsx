@@ -204,48 +204,127 @@ const handleInitializeGroup = async () => {
 
           {/* TAB 1: AISHA'S SIMPLIFIED VIEW */}
           {!loading && activeTab === 'dashboard' && (
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-              {/* Card A: Raw Account Balances */}
-              <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-100">
-                <h3 className="text-xs font-black text-slate-400 tracking-wider mb-4">RAW SYSTEM BALANCES (INR)</h3>
+            <div className="space-y-6">
+              {/* SECTION 1: Individual Balance Summary Cards */}
+              <div>
+                <h2 className="text-lg font-black text-slate-700 tracking-wide mb-4 flex items-center space-x-2">
+                  <span>👥 INDIVIDUAL BALANCE SUMMARY</span>
+                </h2>
+                
                 {financials?.raw_net_balances && Object.keys(financials.raw_net_balances).length > 0 ? (
-                  <div className="space-y-3">
-                    {Object.entries(financials.raw_net_balances).map(([name, b]) => (
-                      <div key={name} className="flex justify-between items-center py-2 border-b border-slate-50">
-                        <span className="font-bold text-slate-700">{name}</span>
-                        <span className={`text-sm font-extrabold ${b >= 0 ? 'text-emerald-600' : 'text-rose-500'}`}>
-                          {b >= 0 ? `+₹${b.toLocaleString()}` : `-₹${Math.abs(b).toLocaleString()}`}
-                        </span>
-                      </div>
-                    ))}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
+                    {Object.entries(financials.raw_net_balances).map(([name, netBalance]) => {
+                      const settlementsForPerson = financials?.aisha_simplified_settlements?.filter(
+                        s => s.from === name || s.to === name
+                      ) || [];
+                      
+                      let totalOwes = 0;
+                      let totalIsOwed = 0;
+                      
+                      settlementsForPerson.forEach(s => {
+                        if (s.from === name) totalOwes += s.amount;
+                        if (s.to === name) totalIsOwed += s.amount;
+                      });
+
+                      return (
+                        <div 
+                          key={name} 
+                          className={`p-5 rounded-xl border-2 transition-all duration-200 cursor-pointer hover:shadow-lg transform hover:-translate-y-1 ${
+                            netBalance > 0 
+                              ? 'bg-emerald-50 border-emerald-300 hover:bg-emerald-100' 
+                              : netBalance < 0 
+                              ? 'bg-rose-50 border-rose-300 hover:bg-rose-100'
+                              : 'bg-slate-50 border-slate-300 hover:bg-slate-100'
+                          }`}
+                        >
+                          <h3 className="font-black text-lg text-slate-800 mb-3 flex items-center space-x-2">
+                            <span>{name}</span>
+                          </h3>
+                          
+                          <div className="space-y-2 mb-4 border-b-2 border-slate-200 pb-3">
+                            <div className="flex justify-between items-center">
+                              <span className="text-xs font-bold text-slate-600 uppercase">Owes:</span>
+                              <span className="text-sm font-extrabold text-rose-600">₹{totalOwes.toLocaleString()}</span>
+                            </div>
+                            <div className="flex justify-between items-center">
+                              <span className="text-xs font-bold text-slate-600 uppercase">Is Owed:</span>
+                              <span className="text-sm font-extrabold text-emerald-600">₹{totalIsOwed.toLocaleString()}</span>
+                            </div>
+                          </div>
+                          
+                          <div className="flex justify-between items-center">
+                            <span className="text-xs font-bold text-slate-600 uppercase">Net Balance:</span>
+                            <span className={`text-lg font-black ${
+                              netBalance > 0 ? 'text-emerald-600' : netBalance < 0 ? 'text-rose-600' : 'text-slate-600'
+                            }`}>
+                              {netBalance > 0 ? `+₹${netBalance.toLocaleString()}` : `-₹${Math.abs(netBalance).toLocaleString()}`}
+                            </span>
+                          </div>
+                        </div>
+                      );
+                    })}
                   </div>
                 ) : (
-                  <p className="text-sm text-slate-400 font-medium">No ledger balances computed yet. Complete a data import pass.</p>
+                  <p className="text-sm text-slate-400 font-medium bg-slate-50 p-4 rounded-lg border border-slate-200">
+                    📊 No ledger balances computed yet. Complete a data import pass.
+                  </p>
                 )}
               </div>
 
-              {/* Card B: Aisha's Optimized Net Settlements Request */}
-              <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-100 md:col-span-2">
-                <h3 className="text-xs font-black text-slate-400 tracking-wider mb-4">AISHA'S NET DEBT SETTLEMENT CLEARING LIST</h3>
+              {/* DIVIDER */}
+              <div className="border-t-2 border-slate-200 pt-6"></div>
+
+              {/* SECTION 2: WHO PAYS WHOM */}
+              <div>
+                <h2 className="text-lg font-black text-slate-700 tracking-wide mb-4 flex items-center space-x-2">
+                  <span>💳 WHO PAYS WHOM (Settlement Transactions)</span>
+                </h2>
+
                 {financials?.aisha_simplified_settlements && financials.aisha_simplified_settlements.length > 0 ? (
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
                     {financials.aisha_simplified_settlements.map((tx, idx) => (
-                      <div key={idx} className="p-4 bg-indigo-50/50 rounded-lg border border-indigo-100 flex flex-col justify-between">
-                        <div className="text-xs text-slate-400 font-bold uppercase tracking-wider mb-2">Transaction Pair #{idx + 1}</div>
-                        <div className="flex items-center justify-between text-sm">
-                          <span className="text-rose-600 font-extrabold">{tx.from}</span>
-                          <span className="text-slate-400 font-medium text-xs">owes</span>
-                          <span className="text-emerald-600 font-extrabold">{tx.to}</span>
+                      <div 
+                        key={idx} 
+                        className="p-6 bg-white rounded-xl border-2 border-indigo-300 shadow-md hover:shadow-xl transition-all duration-200 transform hover:-translate-y-1"
+                      >
+                        <div className="text-xs text-slate-500 font-bold uppercase tracking-wider mb-3 opacity-70">
+                          Transaction #{idx + 1}
                         </div>
-                        <div className="text-right text-lg font-black text-slate-800 mt-2">
-                          ₹{tx.amount.toLocaleString()}
+                        
+                        <div className="flex items-center justify-between mb-4">
+                          <div className="text-center flex-1">
+                            <div className="text-sm font-black text-slate-800 bg-rose-100 px-3 py-2 rounded-lg inline-block">
+                              {tx.from}
+                            </div>
+                            <div className="text-xs text-rose-600 font-bold mt-1 uppercase">Payer</div>
+                          </div>
+                          
+                          <div className="px-3 text-indigo-500 font-bold text-lg">→</div>
+                          
+                          <div className="text-center flex-1">
+                            <div className="text-sm font-black text-slate-800 bg-emerald-100 px-3 py-2 rounded-lg inline-block">
+                              {tx.to}
+                            </div>
+                            <div className="text-xs text-emerald-600 font-bold mt-1 uppercase">Recipient</div>
+                          </div>
+                        </div>
+                        
+                        <div className="text-center">
+                          <div className="text-3xl font-black text-indigo-600 mb-1">
+                            ₹{tx.amount.toLocaleString()}
+                          </div>
+                          <button className="w-full mt-3 px-3 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold rounded-lg transition-all duration-200 uppercase tracking-wider">
+                            📋 Mark As Paid
+                          </button>
                         </div>
                       </div>
                     ))}
                   </div>
                 ) : (
-                  <div className="text-center py-8 bg-slate-50 rounded-lg border border-dashed text-slate-400 text-sm font-medium">
-                    Ledger system is perfectly balanced to zero. No payments are outstanding!
+                  <div className="text-center py-12 bg-gradient-to-r from-emerald-50 to-cyan-50 rounded-xl border-2 border-dashed border-emerald-300">
+                    <span className="text-3xl">✨</span>
+                    <p className="text-slate-600 font-bold mt-2">Ledger system is perfectly balanced!</p>
+                    <p className="text-xs text-slate-400 mt-1">No payments are outstanding</p>
                   </div>
                 )}
               </div>
@@ -254,28 +333,41 @@ const handleInitializeGroup = async () => {
 
           {/* TAB 2: ROHAN'S ITEMIZED AUDIT VIEW */}
           {!loading && activeTab === 'audit' && (
-            <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-100">
-              <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center border-b border-slate-100 pb-4 mb-4 space-y-3 sm:space-y-0">
-                <div>
-                  <h3 className="text-sm font-black text-slate-700 tracking-wide">ROHAN'S TRANSACTION AUDIT ENGINE</h3>
-                  <p className="text-xs text-slate-400 mt-0.5">Line-by-line tracing for full financial transparency.</p>
+            <div className="space-y-6">
+              {/* Header and User Selector */}
+              <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-100">
+                <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-6 border-b border-slate-100 pb-4">
+                  <div>
+                    <h3 className="text-lg font-black text-slate-700 tracking-wide">ROHAN'S TRANSACTION AUDIT ENGINE</h3>
+                    <p className="text-xs text-slate-400 mt-0.5">💡 Line-by-line tracing for full financial transparency.</p>
+                  </div>
                 </div>
-                <div className="flex space-x-2">
-                  {["Aisha", "Rohan", "Priya", "Meera", "Sam", "Dev"].map(u => (
-                    <button 
-                      key={u} 
-                      onClick={() => setSelectedAuditUser(u)}
-                      className={`px-3 py-1.5 rounded text-xs font-bold transition-all ${selectedAuditUser === u ? 'bg-indigo-600 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}
-                    >
-                      {u}
-                    </button>
-                  ))}
+
+                <div>
+                  <h4 className="text-xs font-black text-slate-500 uppercase tracking-wider mb-3">Select Person to View Audit Trail:</h4>
+                  <div className="grid grid-cols-3 sm:grid-cols-6 gap-3">
+                    {["Aisha", "Rohan", "Priya", "Meera", "Sam", "Dev"].map(u => (
+                      <button 
+                        key={u} 
+                        onClick={() => setSelectedAuditUser(u)}
+                        className={`py-3 px-2 rounded-lg text-xs font-bold transition-all duration-200 transform hover:scale-105 uppercase tracking-wider shadow-sm ${
+                          selectedAuditUser === u 
+                            ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-300' 
+                            : 'bg-slate-100 text-slate-700 hover:bg-slate-200 hover:shadow-md'
+                        }`}
+                      >
+                        {u}
+                      </button>
+                    ))}
+                  </div>
                 </div>
               </div>
 
-              {financials?.rohan_itemized_audit_trail && financials.rohan_itemized_audit_trail[selectedAuditUser]?.length > 0 ? (
-                <div className="overflow-x-auto">
-                  <table className="w-full text-left text-sm border-collapse">
+              {/* Transaction Table */}
+              <div className="bg-white rounded-xl shadow-sm border border-slate-100 overflow-hidden">
+                {financials?.rohan_itemized_audit_trail && financials.rohan_itemized_audit_trail[selectedAuditUser]?.length > 0 ? (
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-left text-sm border-collapse">
                     <thead>
                       <tr className="bg-slate-50 text-slate-400 text-xs font-bold uppercase tracking-wider border-b">
                         <th className="py-3 px-4">Effective Date</th>
@@ -297,12 +389,13 @@ const handleInitializeGroup = async () => {
                       ))}
                     </tbody>
                   </table>
-                </div>
-              ) : (
-                <div className="text-center py-12 text-slate-400 text-sm font-medium">
-                  No line-item allocation history found for {selectedAuditUser} in this target database ledger.
-                </div>
-              )}
+                  </div>
+                ) : (
+                  <div className="text-center py-12 text-slate-400 text-sm font-medium bg-slate-50">
+                    No line-item allocation history found for {selectedAuditUser} in this target database ledger.
+                  </div>
+                )}
+              </div>
             </div>
           )}
 
