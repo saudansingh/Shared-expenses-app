@@ -15,11 +15,14 @@ export default function App() {
 
 const [initStatus, setInitStatus] = useState("");
 
+import BASE_URL from './api'; // Adjust the import path to match your file structure
+
 const handleInitializeGroup = async () => {
   try {
     setInitStatus("loading");
-    // Vite proxy auto-strips /api and targets http://127.0.0.1:8000/groups/initialize
-    const response = await fetch('/api/groups/initialize', { method: 'POST' });
+    
+    // Dynamically points to local proxy in dev, or live backend URL in production
+    const response = await fetch(`${BASE_URL}/api/groups/initialize`, { method: 'POST' });
     const data = await response.json();
     
     if (data.status === "success") {
