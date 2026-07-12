@@ -146,6 +146,28 @@ def finalize_import_to_database(payload: schemas.FinalizeImportPayload, db: Sess
     if not group:
         raise HTTPException(status_code=404, detail="Target group reference not found.")
 
+    # 🚨 THE FIX: Clear all previous data for this group before doing anything else
+    # This keeps records from accumulating and prevents amounts from ballooning!
+    try:
+        # 1. Drop old explicit splits belonging to this group's expenses
+        db.query(models.ExpenseSplit).filter(
+            models.ExpenseSplit.expense_id.in_(
+                db.query(models.Expense.id).filter(models.Expense.group_id == group.id)
+            )
+        ).delete(synchronize_session=False)
+
+        # 2. Drop old expenses
+        db.query(models.Expense).filter(models.Expense.group_id == group.id).delete(synchronize_session=False)
+
+        # 3. Drop old settlements 
+        if hasattr(models, "Settlement"):
+            db.query(models.Settlement).filter(models.Settlement.group_id == group.id).delete(synchronize_session=False)
+            
+        db.flush()
+    except Exception as clear_error:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Failed to clear old historical data states: {str(clear_error)}")
+
     imported_expenses_count = 0
     imported_settlements_count = 0
 
@@ -248,7 +270,7 @@ def finalize_import_to_database(payload: schemas.FinalizeImportPayload, db: Sess
     db.commit()
     return {
         "status": "success",
-        "message": f"Successfully imported {imported_expenses_count} expenses and {imported_settlements_count} settlements."
+        "message": f"Successfully cleared previous state and fresh-imported {imported_expenses_count} expenses and {imported_settlements_count} settlements."
     }
 
 # --- BALANCES & AUDIT BALANCING LOGIC ---
