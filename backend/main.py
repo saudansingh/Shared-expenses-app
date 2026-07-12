@@ -1,7 +1,7 @@
 import jwt
 import datetime
 import pandas as pd
-import os  # FIX: Explicitly imported to prevent the 500 NameError crash!
+import os
 from decimal import Decimal, ROUND_HALF_UP
 from fastapi import FastAPI, Depends, HTTPException, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
@@ -119,13 +119,21 @@ async def stage_csv_upload(file: UploadFile = File(...)):
             target_path = temp_path
         
         report_data = importer.scan_and_stage_csv(target_path)
+        
+        # FIX: Alias staging response payload keys so UI components can find data arrays smoothly
+        if isinstance(report_data, dict):
+            records = report_data.get("records", [])
+            summary = report_data.get("summary_report", [])
+            report_data["expenses"] = records
+            report_data["anomalies"] = summary
+            report_data["summary"] = summary
+            
         return report_data
         
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Core ingestion engine failure: {str(e)}")
         
     finally:
-        # Secure cleanup blocks never fail or leave dangling locked processes
         try:
             if os.path.exists(temp_path): os.remove(temp_path)
             if csv_path and os.path.exists(csv_path): os.remove(csv_path)
@@ -254,17 +262,13 @@ def get_group_financial_analytics(group_id: int, db: Session = Depends(database.
     expenses = db.query(models.Expense).filter(models.Expense.group_id == group_id).all()
     
     for exp in expenses:
-        # Credit the full paid value directly to the true payer
         net_balances[exp.paid_by_id] += Decimal(str(exp.amount_in_inr))
         
-        # FIX: Directly query the ExpenseSplit table by expense ID to bypass uninitialized model properties
         explicit_splits = db.query(models.ExpenseSplit).filter(models.ExpenseSplit.expense_id == exp.id).all()
-        
         if explicit_splits:
             for split in explicit_splits:
                 net_balances[split.user_id] -= Decimal(str(split.owed_amount))
         else:
-            # FALLBACK: Equal fallback partition if structural splits are absent
             if active_user_ids:
                 share = Decimal(str(exp.amount_in_inr)) / Decimal(len(active_user_ids))
                 for uid in active_user_ids:
@@ -276,12 +280,9 @@ def get_group_financial_analytics(group_id: int, db: Session = Depends(database.
             net_balances[setl.payer_id] -= Decimal(str(setl.amount))
             net_balances[setl.payee_id] += Decimal(str(setl.amount))
 
-    # --- ITEMIZED AUDIT TRAILS GENERATION ---
     audit_trail = {}
     for uid, name in user_name_map.items():
         items = []
-        
-        # Fix audit trail query structure
         splits_owed = db.query(models.ExpenseSplit).filter(models.ExpenseSplit.user_id == uid).all()
         for s in splits_owed:
             exp_ref = db.query(models.Expense).filter(models.Expense.id == s.expense_id, models.Expense.group_id == group_id).first()
@@ -308,7 +309,6 @@ def get_group_financial_analytics(group_id: int, db: Session = Depends(database.
                     })
         audit_trail[name] = items
 
-    # --- SIMPLIFIED SETTLEMENT ENGINE ---
     debtors = []
     text_creditors = []
     for uid, bal in net_balances.items():
@@ -344,10 +344,21 @@ def get_group_financial_analytics(group_id: int, db: Session = Depends(database.
         if creditor["balance"] <= 0:
             c_idx += 1
 
+    # Safe evaluation references mapped directly to matching name tokens
+    final_balances_clean = {user_name_map[uid]: float(b) for uid, b in net_balances.items() if b != 0}
+
+    # FIX: Provide full key variants so frontend mapping blocks render seamlessly
     return {
-        "raw_net_balances": {user_name_map[uid]: float(b) for uid, b in net_balances.items() if b != 0},
+        "raw_net_balances": final_balances_clean,
+        "balances": final_balances_clean,
+        
         "aisha_simplified_settlements": simplified_transactions,
-        "rohan_itemized_audit_trail": audit_trail
+        "simplified_settlements": simplified_transactions,
+        "settlements": simplified_transactions,
+        
+        "rohan_itemized_audit_trail": audit_trail,
+        "itemized_audit_trail": audit_trail,
+        "audit_trail": audit_trail
     }
 
 @app.post("/groups/initialize")
