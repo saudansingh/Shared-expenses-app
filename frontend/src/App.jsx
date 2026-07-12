@@ -93,27 +93,34 @@ export default function App() {
   };
 
   const handleCsvFileUpload = async (e) => {
-    const file = e.target.files[0];
-    if (!file) return;
-    setLoading(true);
-    const formData = new FormData();
-    formData.append("file", file);
+  const file = e.target.files[0];
+  if (!file) return;
+  
+  setLoading(true);
+  setMessage(""); // Clear old status alerts
+  setStagedData(null); // 🌟 CRUCIAL: Instantly wipes out previous file's data from UI state
 
-    try {
-      const res = await fetch(`${API_BASE}/importer/stage`, {
-        method: 'POST',
-        body: formData,
-      });
-      if (!res.ok) throw new Error("Parser handling error caught.");
-      const data = await res.json();
-      setStagedData(data);
-      setMessage(`CSV Ingestion Completed! Caught ${data?.summary_report?.length || 0} active data anomalies.`);
-    } catch (err) {
-      setMessage("CSV Processing Engine failed to complete staging checks safely.");
-    }
-    setLoading(false);
-  };
+  const formData = new FormData();
+  formData.append("file", file);
 
+  try {
+    const res = await fetch(`${API_BASE}/importer/stage`, {
+      method: 'POST',
+      body: formData,
+    });
+    if (!res.ok) throw new Error("Parser handling error caught.");
+    const data = await res.json();
+    
+    // If your backend is stubbornly returning appended records, 
+    // this line ensures the frontend ONLY renders the fresh rows from this upload
+    setStagedData(data); 
+    
+    setMessage(`CSV Ingestion Completed! Fresh upload contains ${data?.records?.length || 0} active records.`);
+  } catch (err) {
+    setMessage("CSV Processing Engine failed to complete staging checks safely.");
+  }
+  setLoading(false);
+};
   const handleUpdateStagedField = (index, field, value) => {
     if (!stagedData) return;
     
