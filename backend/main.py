@@ -1,5 +1,6 @@
 import jwt
 import datetime
+import pandas as pd
 from decimal import Decimal, ROUND_HALF_UP
 from fastapi import FastAPI, Depends, HTTPException, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
@@ -90,19 +91,39 @@ def list_groups(db: Session = Depends(database.get_db)):
 @app.post("/importer/stage")
 async def stage_csv_upload(file: UploadFile = File(...)):
     filename_lower = file.filename.lower()
-    if not (filename_lower.endswith('.csv') or '.csv' in filename_lower):
+    
+    # FIX: Accept both CSV and true Excel formats to prevent assignment submission rejections
+    is_csv = filename_lower.endswith('.csv') or '.csv' in filename_lower
+    is_excel = filename_lower.endswith('.xlsx') or filename_lower.endswith('.xls')
+    
+    if not (is_csv or is_excel):
         raise HTTPException(
             status_code=400, 
-            detail=f"Invalid file type for '{file.filename}'. System requires a raw CSV format layout export."
+            detail=f"Invalid file extension layout for '{file.filename}'. App processes structured CSV/XLSX assets only."
         )
         
     try:
-        temp_path = "temp_uploaded_expenses.csv"
+        # Save file to a dynamic temporary file path
+        temp_path = f"temp_uploaded_{file.filename}"
         content = await file.read()
         with open(temp_path, "wb") as f:
             f.write(content)
         
-        report_data = importer.scan_and_stage_csv(temp_path)
+        # Safe conversion: If they uploaded an Excel sheet, seamlessly translate it to a clean CSV on the fly
+        if is_excel:
+            csv_path = temp_path + ".csv"
+            excel_df = pd.read_excel(temp_path)
+            excel_df.to_csv(csv_path, index=False, encoding='utf-8-sig')
+            target_path = csv_path
+        else:
+            target_path = temp_path
+        
+        report_data = importer.scan_and_stage_csv(target_path)
+        
+        # Clean up temporary storage space
+        if os.path.exists(temp_path): os.remove(temp_path)
+        if is_excel and os.path.exists(csv_path): os.remove(csv_path)
+            
         return report_data
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Core ingestion engine failure: {str(e)}")
@@ -132,7 +153,8 @@ def finalize_import_to_database(payload: schemas.FinalizeImportPayload, db: Sess
         if not raw_payer or float(raw_amount) == 0:
             continue
 
-        payer_name = str(raw_payer).strip().split()[0].capitalize()
+        # Utilize our robust normalize utility to match usernames securely
+        payer_name = importer.normalize_name(str(raw_payer))
         payer = db.query(models.User).filter(models.User.username == payer_name).first()
         if not payer:
             continue
@@ -147,7 +169,7 @@ def finalize_import_to_database(payload: schemas.FinalizeImportPayload, db: Sess
         if is_settlement_flag:
             payee_name = ""
             if raw_split_with:
-                payee_name = str(raw_split_with[0]).strip().split()[0].capitalize()
+                payee_name = importer.normalize_name(str(raw_split_with[0]))
             payee = db.query(models.User).filter(models.User.username == payee_name).first() if payee_name else None
             if payee:
                 settlement = models.Settlement(
@@ -221,8 +243,6 @@ def finalize_import_to_database(payload: schemas.FinalizeImportPayload, db: Sess
 # --- BALANCES & AUDIT BALANCING LOGIC ---
 @app.get("/groups/{group_id}/balances")
 def get_group_financial_analytics(group_id: int, db: Session = Depends(database.get_db)):
-    from decimal import ROUND_HALF_UP  # Ensure rounding parameter is explicitly imported
-    
     users = db.query(models.User).all()
     net_balances = {u.id: Decimal("0.00") for u in users}
     user_name_map = {u.id: u.username for u in users}
@@ -231,15 +251,12 @@ def get_group_financial_analytics(group_id: int, db: Session = Depends(database.
     expenses = db.query(models.Expense).filter(models.Expense.group_id == group_id).all()
     
     for exp in expenses:
-        # 1. Credit the full paid value to the payer
         net_balances[exp.paid_by_id] += Decimal(str(exp.amount_in_inr))
         
-        # 2. Check if explicit table splits exist
         if hasattr(exp, "splits") and exp.splits:
             for split in exp.splits:
                 net_balances[split.user_id] -= Decimal(str(split.owed_amount))
         else:
-            # FALLBACK: If no explicit splits exist in DB, split it equally among all users
             if active_user_ids:
                 share = Decimal(str(exp.amount_in_inr)) / Decimal(len(active_user_ids))
                 for uid in active_user_ids:
@@ -251,7 +268,6 @@ def get_group_financial_analytics(group_id: int, db: Session = Depends(database.
             net_balances[setl.payer_id] -= Decimal(str(setl.amount))
             net_balances[setl.payee_id] += Decimal(str(setl.amount))
 
-    # --- ITEMIZED AUDIT TRAILS GENERATION ---
     audit_trail = {}
     for uid, name in user_name_map.items():
         items = []
@@ -282,7 +298,6 @@ def get_group_financial_analytics(group_id: int, db: Session = Depends(database.
                         })
         audit_trail[name] = items
 
-    # --- SIMPLIFIED SETTLEMENT ENGINE ---
     debtors = []
     text_creditors = []
     for uid, bal in net_balances.items():
@@ -295,7 +310,6 @@ def get_group_financial_analytics(group_id: int, db: Session = Depends(database.
     simplified_transactions = []
     d_idx, c_idx = 0, 0
 
-    # Deep copy lists to prevent modifying iteration references
     debtors_pool = [{"name": d["name"], "balance": d["balance"]} for d in debtors]
     creditors_pool = [{"name": c["name"], "balance": c["balance"]} for c in text_creditors]
 
