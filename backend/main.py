@@ -1,6 +1,7 @@
 import jwt
 import datetime
 import pandas as pd
+import os  # FIX: Explicitly imported to prevent the 500 NameError crash!
 from decimal import Decimal, ROUND_HALF_UP
 from fastapi import FastAPI, Depends, HTTPException, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
@@ -92,7 +93,6 @@ def list_groups(db: Session = Depends(database.get_db)):
 async def stage_csv_upload(file: UploadFile = File(...)):
     filename_lower = file.filename.lower()
     
-    # FIX: Accept both CSV and true Excel formats to prevent assignment submission rejections
     is_csv = filename_lower.endswith('.csv') or '.csv' in filename_lower
     is_excel = filename_lower.endswith('.xlsx') or filename_lower.endswith('.xls')
     
@@ -102,14 +102,14 @@ async def stage_csv_upload(file: UploadFile = File(...)):
             detail=f"Invalid file extension layout for '{file.filename}'. App processes structured CSV/XLSX assets only."
         )
         
+    temp_path = f"temp_uploaded_{file.filename}"
+    csv_path = None
+    
     try:
-        # Save file to a dynamic temporary file path
-        temp_path = f"temp_uploaded_{file.filename}"
         content = await file.read()
         with open(temp_path, "wb") as f:
             f.write(content)
         
-        # Safe conversion: If they uploaded an Excel sheet, seamlessly translate it to a clean CSV on the fly
         if is_excel:
             csv_path = temp_path + ".csv"
             excel_df = pd.read_excel(temp_path)
@@ -119,14 +119,18 @@ async def stage_csv_upload(file: UploadFile = File(...)):
             target_path = temp_path
         
         report_data = importer.scan_and_stage_csv(target_path)
-        
-        # Clean up temporary storage space
-        if os.path.exists(temp_path): os.remove(temp_path)
-        if is_excel and os.path.exists(csv_path): os.remove(csv_path)
-            
         return report_data
+        
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Core ingestion engine failure: {str(e)}")
+        
+    finally:
+        # Secure cleanup blocks never fail or leave dangling locked processes
+        try:
+            if os.path.exists(temp_path): os.remove(temp_path)
+            if csv_path and os.path.exists(csv_path): os.remove(csv_path)
+        except Exception:
+            pass
 
 @app.post("/importer/finalize")
 def finalize_import_to_database(payload: schemas.FinalizeImportPayload, db: Session = Depends(database.get_db)):
@@ -153,7 +157,6 @@ def finalize_import_to_database(payload: schemas.FinalizeImportPayload, db: Sess
         if not raw_payer or float(raw_amount) == 0:
             continue
 
-        # Utilize our robust normalize utility to match usernames securely
         payer_name = importer.normalize_name(str(raw_payer))
         payer = db.query(models.User).filter(models.User.username == payer_name).first()
         if not payer:
