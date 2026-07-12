@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import BASE_URL from './api.js';
 
 export default function App() {
-  const API_BASE = `${BASE_URL}/api`;
+  const API_BASE = BASE_URL;
   
   // App Core State Layers
   const [groups, setGroups] = useState([]);
