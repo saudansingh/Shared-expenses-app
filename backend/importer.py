@@ -19,8 +19,26 @@ VALID_MEMBERS = {
 def normalize_name(name_str):
     if pd.isna(name_str) or not isinstance(name_str, str) or not name_str.strip():
         return None
-    cleaned = name_str.strip().split()[0].capitalize()
-    return cleaned
+    
+    # Clean up spaces and convert to lowercase for flexible matching
+    cleaned = name_str.strip().lower()
+    
+    # Exact and fuzzy matching lookups for valid system members
+    if "aisha" in cleaned:
+        return "Aisha"
+    if "rohan" in cleaned:
+        return "Rohan"
+    if "priya" in cleaned:
+        return "Priya"
+    if "meera" in cleaned:
+        return "Meera"
+    if "sam" in cleaned:
+        return "Sam"
+    if "dev" in cleaned:
+        return "Dev"
+        
+    # Fallback: Just grab the first word and capitalize it nicely
+    return cleaned.split()[0].capitalize()
 
 def parse_monetary_value(val):
     if pd.isna(val) or str(val).strip() == "":
