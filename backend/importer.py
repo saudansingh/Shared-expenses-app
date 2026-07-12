@@ -2,7 +2,7 @@ import pandas as pd
 import numpy as np
 import re
 from datetime import datetime
-from decimal import Decimal
+from decimal import Decimal, ROUND_HALF_UP
 import os
 
 USD_TO_INR_RATE = Decimal("83.50")
@@ -20,24 +20,17 @@ def normalize_name(name_str):
     if pd.isna(name_str) or not isinstance(name_str, str) or not name_str.strip():
         return None
     
-    # Clean up spaces and convert to lowercase for flexible matching
     cleaned = name_str.strip().lower()
     
-    # Exact and fuzzy matching lookups for valid system members
-    if "aisha" in cleaned:
-        return "Aisha"
-    if "rohan" in cleaned:
-        return "Rohan"
-    if "priya" in cleaned:
-        return "Priya"
-    if "meera" in cleaned:
-        return "Meera"
-    if "sam" in cleaned:
-        return "Sam"
-    if "dev" in cleaned:
-        return "Dev"
-        
-    # Fallback: Just grab the first word and capitalize it nicely
+    # Advanced extraction to handle case sensitivity and extra string characters safely
+    if "aisha" in cleaned: return "Aisha"
+    if "rohan" in cleaned: return "Rohan"
+    if "priya" in cleaned: return "Priya"
+    if "meera" in cleaned: return "Meera"
+    if "sam" in cleaned:   return "Sam"
+    if "dev" in cleaned:   return "Dev"
+    
+    # Fallback to structural extraction if it's a completely new username
     return cleaned.split()[0].capitalize()
 
 def parse_monetary_value(val):
@@ -45,8 +38,9 @@ def parse_monetary_value(val):
         return Decimal("0.00")
     try:
         cleaned_str = str(val).replace(",", "").replace("$", "").strip()
-        # Use native string rounding parameter "ROUND_HALF_UP" to prevent library mismatch errors
-        return Decimal(cleaned_str).quantize(Decimal("0.01"), rounding="ROUND_HALF_UP")
+        # Convert through a float first to safely clean 3-decimal values like 899.995
+        float_val = float(cleaned_str)
+        return Decimal(f"{float_val:.2f}").quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
     except Exception:
         return Decimal("0.00")
 
@@ -78,40 +72,35 @@ def scan_and_stage_csv(file_path: str):
         action_taken = "Staged for review"
         
         try:
-            # Flexible mapping lookups accept almost any variant layout format securely
+            # 1. Broad Fuzzy Column Variations Scanners
             raw_date = (
                 row.get("date") or row.get("splidate") or row.get("transaction_date") or 
                 row.get("day") or row.get("effective_date") or row.get("timestamp") or
                 row.get("date_stamp")
             )
-            
             raw_desc = str(
                 row.get("description") or row.get("item") or row.get("particulars") or 
                 row.get("info") or row.get("details") or ""
             ).strip()
-            
             raw_paid_by = (
                 row.get("paid_by") or row.get("paidby") or row.get("payer") or 
                 row.get("who_paid") or row.get("payer_account") or row.get("by")
             )
-            
             raw_amount = (
                 row.get("amount") or row.get("cost") or row.get("price") or 
                 row.get("value") or row.get("base_amt") or row.get("total") or
                 row.get("original_amount")
             )
-            
             raw_currency = (
                 row.get("currency") or row.get("curr") or row.get("unit") or 
                 row.get("original_currency") or row.get("money_type")
             )
-            
             raw_split_type = row.get("split_type") or row.get("splittype") or row.get("type")
             raw_split_with = row.get("split") or row.get("split_with") or row.get("split_between") or row.get("members")
             raw_split_details = str(row.get("split_details") or row.get("details") or "").strip()
             raw_notes = str(row.get("notes") or "").strip()
 
-            # FIX: Robust check catches empty spreadsheet spacing variants safely
+            # Guard Filter: Safely skip empty trailing rows without crashing the validation context
             if not raw_date and not raw_paid_by and (raw_amount is None or str(raw_amount).strip() == ""):
                 continue
 
@@ -126,7 +115,7 @@ def scan_and_stage_csv(file_path: str):
             amount = parse_monetary_value(raw_amount)
             
             if currency == "USD":
-                amount_in_inr = (amount * USD_TO_INR_RATE).quantize(Decimal("0.01"), rounding="ROUND_HALF_UP")
+                amount_in_inr = (amount * USD_TO_INR_RATE).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
                 anomalies.append({
                     "type": "FOREIGN_CURRENCY_CONVERSION", "severity": "LOW", 
                     "message": "Converted standard foreign currency transaction to base INR."
@@ -190,6 +179,7 @@ def scan_and_stage_csv(file_path: str):
                 "action_taken": "Staged for review"
             })
         except Exception as row_error:
+            # Inline fallback keeps any single broken row from throwing a global 400 Bad Request
             anomaly_report.append({
                 "row_index": row_id, "description": "System Fallback Recovery Line",
                 "type": "PARSING_SKIPPED", "severity": "HIGH", 
