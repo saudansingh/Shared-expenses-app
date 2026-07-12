@@ -78,7 +78,7 @@ def scan_and_stage_csv(file_path: str):
         action_taken = "Staged for review"
         
         try:
-            # --- START OF REPLACEMENT ---
+            # Flexible mapping lookups accept almost any variant layout format securely
             raw_date = (
                 row.get("date") or row.get("splidate") or row.get("transaction_date") or 
                 row.get("day") or row.get("effective_date") or row.get("timestamp") or
@@ -110,10 +110,9 @@ def scan_and_stage_csv(file_path: str):
             raw_split_with = row.get("split") or row.get("split_with") or row.get("split_between") or row.get("members")
             raw_split_details = str(row.get("split_details") or row.get("details") or "").strip()
             raw_notes = str(row.get("notes") or "").strip()
-            # --- END OF REPLACEMENT ---
-    
 
-            if not raw_date and not raw_paid_by and raw_amount is None:
+            # FIX: Robust check catches empty spreadsheet spacing variants safely
+            if not raw_date and not raw_paid_by and (raw_amount is None or str(raw_amount).strip() == ""):
                 continue
 
             paid_by = normalize_name(str(raw_paid_by)) if raw_paid_by else None
