@@ -254,12 +254,17 @@ def get_group_financial_analytics(group_id: int, db: Session = Depends(database.
     expenses = db.query(models.Expense).filter(models.Expense.group_id == group_id).all()
     
     for exp in expenses:
+        # Credit the full paid value directly to the true payer
         net_balances[exp.paid_by_id] += Decimal(str(exp.amount_in_inr))
         
-        if hasattr(exp, "splits") and exp.splits:
-            for split in exp.splits:
+        # FIX: Directly query the ExpenseSplit table by expense ID to bypass uninitialized model properties
+        explicit_splits = db.query(models.ExpenseSplit).filter(models.ExpenseSplit.expense_id == exp.id).all()
+        
+        if explicit_splits:
+            for split in explicit_splits:
                 net_balances[split.user_id] -= Decimal(str(split.owed_amount))
         else:
+            # FALLBACK: Equal fallback partition if structural splits are absent
             if active_user_ids:
                 share = Decimal(str(exp.amount_in_inr)) / Decimal(len(active_user_ids))
                 for uid in active_user_ids:
@@ -271,36 +276,39 @@ def get_group_financial_analytics(group_id: int, db: Session = Depends(database.
             net_balances[setl.payer_id] -= Decimal(str(setl.amount))
             net_balances[setl.payee_id] += Decimal(str(setl.amount))
 
+    # --- ITEMIZED AUDIT TRAILS GENERATION ---
     audit_trail = {}
     for uid, name in user_name_map.items():
         items = []
-        if hasattr(models, "ExpenseSplit"):
-            splits_owed = db.query(models.ExpenseSplit).filter(models.ExpenseSplit.user_id == uid).all()
-            for s in splits_owed:
-                exp = s.expense
-                if exp and exp.group_id == group_id:
-                    items.append({
-                        "date": str(exp.date),
-                        "description": exp.description,
-                        "type": "OWED_SHARE",
-                        "amount": float(s.owed_amount),
-                        "context": f"Paid by {user_name_map[exp.paid_by_id]}"
-                    })
+        
+        # Fix audit trail query structure
+        splits_owed = db.query(models.ExpenseSplit).filter(models.ExpenseSplit.user_id == uid).all()
+        for s in splits_owed:
+            exp_ref = db.query(models.Expense).filter(models.Expense.id == s.expense_id, models.Expense.group_id == group_id).first()
+            if exp_ref:
+                items.append({
+                    "date": str(exp_ref.date),
+                    "description": exp_ref.description,
+                    "type": "OWED_SHARE",
+                    "amount": float(s.owed_amount),
+                    "context": f"Paid by {user_name_map.get(exp_ref.paid_by_id, 'Unknown')}"
+                })
         
         paid_expenses = db.query(models.Expense).filter(models.Expense.group_id == group_id, models.Expense.paid_by_id == uid).all()
         for exp in paid_expenses:
-            if hasattr(exp, "splits") and exp.splits:
-                for s in exp.splits:
-                    if s.user_id != uid:
-                        items.append({
-                            "date": str(exp.date),
-                            "description": exp.description,
-                            "type": "CREDIT_DUE",
-                            "amount": float(s.owed_amount),
-                            "context": f"Owed by {user_name_map[s.user_id]}"
-                        })
+            explicit_splits = db.query(models.ExpenseSplit).filter(models.ExpenseSplit.expense_id == exp.id).all()
+            for s in explicit_splits:
+                if s.user_id != uid:
+                    items.append({
+                        "date": str(exp.date),
+                        "description": exp.description,
+                        "type": "CREDIT_DUE",
+                        "amount": float(s.owed_amount),
+                        "context": f"Owed by {user_name_map.get(s.user_id, 'Unknown')}"
+                    })
         audit_trail[name] = items
 
+    # --- SIMPLIFIED SETTLEMENT ENGINE ---
     debtors = []
     text_creditors = []
     for uid, bal in net_balances.items():
