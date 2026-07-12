@@ -60,44 +60,40 @@ def scan_and_stage_csv(file_path: str):
         action_taken = "Staged for review"
         
         try:
-            try:
-            # 1. DATE: Add lookups for common text and variants
+            # --- START OF REPLACEMENT ---
             raw_date = (
                 row.get("date") or row.get("splidate") or row.get("transaction_date") or 
                 row.get("day") or row.get("effective_date") or row.get("timestamp") or
                 row.get("date_stamp")
             )
             
-            # 2. DESCRIPTION: Add lookups for items, info, or particulars
             raw_desc = str(
                 row.get("description") or row.get("item") or row.get("particulars") or 
                 row.get("info") or row.get("details") or ""
             ).strip()
             
-            # 3. PAYER: Match against 'who_paid', 'payer', 'payer_account', 'paid_by'
             raw_paid_by = (
                 row.get("paid_by") or row.get("paidby") or row.get("payer") or 
                 row.get("who_paid") or row.get("payer_account") or row.get("by")
             )
             
-            # 4. AMOUNT: Account for 'base_amt', 'amount', 'cost', 'total'
             raw_amount = (
                 row.get("amount") or row.get("cost") or row.get("price") or 
                 row.get("value") or row.get("base_amt") or row.get("total") or
                 row.get("original_amount")
             )
             
-            # 5. CURRENCY: Look for units or unified labels
             raw_currency = (
                 row.get("currency") or row.get("curr") or row.get("unit") or 
                 row.get("original_currency") or row.get("money_type")
             )
             
-            # 6. SPLIT ARCHITECTURE
             raw_split_type = row.get("split_type") or row.get("splittype") or row.get("type")
             raw_split_with = row.get("split") or row.get("split_with") or row.get("split_between") or row.get("members")
-            raw_split_details = str(row.get("split_details") or "").strip()
+            raw_split_details = str(row.get("split_details") or row.get("details") or "").strip()
             raw_notes = str(row.get("notes") or "").strip()
+            # --- END OF REPLACEMENT ---
+    
 
             if not raw_date and not raw_paid_by and raw_amount is None:
                 continue
