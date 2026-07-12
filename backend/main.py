@@ -221,23 +221,37 @@ def finalize_import_to_database(payload: schemas.FinalizeImportPayload, db: Sess
 # --- BALANCES & AUDIT BALANCING LOGIC ---
 @app.get("/groups/{group_id}/balances")
 def get_group_financial_analytics(group_id: int, db: Session = Depends(database.get_db)):
+    from decimal import ROUND_HALF_UP  # Ensure rounding parameter is explicitly imported
+    
     users = db.query(models.User).all()
     net_balances = {u.id: Decimal("0.00") for u in users}
     user_name_map = {u.id: u.username for u in users}
+    active_user_ids = list(user_name_map.keys())
 
     expenses = db.query(models.Expense).filter(models.Expense.group_id == group_id).all()
+    
     for exp in expenses:
-        net_balances[exp.paid_by_id] += exp.amount_in_inr
+        # 1. Credit the full paid value to the payer
+        net_balances[exp.paid_by_id] += Decimal(str(exp.amount_in_inr))
+        
+        # 2. Check if explicit table splits exist
         if hasattr(exp, "splits") and exp.splits:
             for split in exp.splits:
-                net_balances[split.user_id] -= split.owed_amount
+                net_balances[split.user_id] -= Decimal(str(split.owed_amount))
+        else:
+            # FALLBACK: If no explicit splits exist in DB, split it equally among all users
+            if active_user_ids:
+                share = Decimal(str(exp.amount_in_inr)) / Decimal(len(active_user_ids))
+                for uid in active_user_ids:
+                    net_balances[uid] -= share
 
     if hasattr(models, "Settlement"):
         settlements = db.query(models.Settlement).filter(models.Settlement.group_id == group_id).all()
         for setl in settlements:
-            net_balances[setl.payer_id] -= setl.amount
-            net_balances[setl.payee_id] += setl.amount
+            net_balances[setl.payer_id] -= Decimal(str(setl.amount))
+            net_balances[setl.payee_id] += Decimal(str(setl.amount))
 
+    # --- ITEMIZED AUDIT TRAILS GENERATION ---
     audit_trail = {}
     for uid, name in user_name_map.items():
         items = []
@@ -247,19 +261,20 @@ def get_group_financial_analytics(group_id: int, db: Session = Depends(database.
                 exp = s.expense
                 if exp and exp.group_id == group_id:
                     items.append({
-                        "date": str(exp.date),  # ✅ FIXED: mapped from exp.expense_date to exp.date
+                        "date": str(exp.date),
                         "description": exp.description,
                         "type": "OWED_SHARE",
                         "amount": float(s.owed_amount),
                         "context": f"Paid by {user_name_map[exp.paid_by_id]}"
                     })
+        
         paid_expenses = db.query(models.Expense).filter(models.Expense.group_id == group_id, models.Expense.paid_by_id == uid).all()
         for exp in paid_expenses:
             if hasattr(exp, "splits") and exp.splits:
                 for s in exp.splits:
                     if s.user_id != uid:
                         items.append({
-                            "date": str(exp.date),  # ✅ FIXED: mapped from exp.expense_date to exp.date
+                            "date": str(exp.date),
                             "description": exp.description,
                             "type": "CREDIT_DUE",
                             "amount": float(s.owed_amount),
@@ -267,6 +282,7 @@ def get_group_financial_analytics(group_id: int, db: Session = Depends(database.
                         })
         audit_trail[name] = items
 
+    # --- SIMPLIFIED SETTLEMENT ENGINE ---
     debtors = []
     text_creditors = []
     for uid, bal in net_balances.items():
@@ -279,9 +295,13 @@ def get_group_financial_analytics(group_id: int, db: Session = Depends(database.
     simplified_transactions = []
     d_idx, c_idx = 0, 0
 
-    while d_idx < len(debtors) and c_idx < len(text_creditors):
-        debtor = debtors[d_idx]
-        creditor = text_creditors[c_idx]
+    # Deep copy lists to prevent modifying iteration references
+    debtors_pool = [{"name": d["name"], "balance": d["balance"]} for d in debtors]
+    creditors_pool = [{"name": c["name"], "balance": c["balance"]} for c in text_creditors]
+
+    while d_idx < len(debtors_pool) and c_idx < len(creditors_pool):
+        debtor = debtors_pool[d_idx]
+        creditor = creditors_pool[c_idx]
 
         settle_amount = min(debtor["balance"], creditor["balance"])
         if settle_amount > 0:
@@ -294,9 +314,9 @@ def get_group_financial_analytics(group_id: int, db: Session = Depends(database.
         debtor["balance"] -= settle_amount
         creditor["balance"] -= settle_amount
 
-        if debtor["balance"] == 0:
+        if debtor["balance"] <= 0:
             d_idx += 1
-        if creditor["balance"] == 0:
+        if creditor["balance"] <= 0:
             c_idx += 1
 
     return {
