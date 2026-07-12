@@ -22,7 +22,6 @@ def normalize_name(name_str):
     
     cleaned = name_str.strip().lower()
     
-    # Advanced extraction to handle case sensitivity and extra string characters safely
     if "aisha" in cleaned: return "Aisha"
     if "rohan" in cleaned: return "Rohan"
     if "priya" in cleaned: return "Priya"
@@ -30,7 +29,6 @@ def normalize_name(name_str):
     if "sam" in cleaned:   return "Sam"
     if "dev" in cleaned:   return "Dev"
     
-    # Fallback to structural extraction if it's a completely new username
     return cleaned.split()[0].capitalize()
 
 def parse_monetary_value(val):
@@ -38,7 +36,6 @@ def parse_monetary_value(val):
         return Decimal("0.00")
     try:
         cleaned_str = str(val).replace(",", "").replace("$", "").strip()
-        # Convert through a float first to safely clean 3-decimal values like 899.995
         float_val = float(cleaned_str)
         return Decimal(f"{float_val:.2f}").quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
     except Exception:
@@ -46,12 +43,25 @@ def parse_monetary_value(val):
 
 def scan_and_stage_csv(file_path: str):
     try:
-        df = pd.read_csv(file_path, encoding='utf-8-sig')
-    except Exception:
+        # Step 1: Read the CSV file cleanly
         try:
+            df = pd.read_csv(file_path, encoding='utf-8-sig')
+        except Exception:
             df = pd.read_csv(file_path, encoding='latin1')
-        except Exception as e:
-            return {"records": [], "summary_report": [{"row_index": 0, "description": "File Read Failure", "type": "CRITICAL", "severity": "CRITICAL", "message": f"Pandas could not read file: {str(e)} "}]}
+            
+        # FIX: Drop completely empty columns and rows immediately to prevent naming collision 400 crashes
+        df = df.dropna(how='all', axis=0) # Clear out completely empty horizontal lines
+        df = df.loc[:, ~df.columns.str.contains('^Unnamed')] # Safely strip unnamed trailing structural columns
+        
+    except Exception as e:
+        return {
+            "records": [], 
+            "summary_report": [{
+                "row_index": 0, "description": "File Read Failure", 
+                "type": "CRITICAL", "severity": "CRITICAL", 
+                "message": f"Pandas could not safely process data blocks: {str(e)}"
+            }]
+        }
     
     cleaned_columns = {}
     for col in df.columns:
@@ -72,7 +82,7 @@ def scan_and_stage_csv(file_path: str):
         action_taken = "Staged for review"
         
         try:
-            # 1. Broad Fuzzy Column Variations Scanners
+            # Flexible structural checks mapping layout keys flawlessly
             raw_date = (
                 row.get("date") or row.get("splidate") or row.get("transaction_date") or 
                 row.get("day") or row.get("effective_date") or row.get("timestamp") or
@@ -100,7 +110,7 @@ def scan_and_stage_csv(file_path: str):
             raw_split_details = str(row.get("split_details") or row.get("details") or "").strip()
             raw_notes = str(row.get("notes") or "").strip()
 
-            # Guard Filter: Safely skip empty trailing rows without crashing the validation context
+            # Safeguard row check flags whitespace entries
             if not raw_date and not raw_paid_by and (raw_amount is None or str(raw_amount).strip() == ""):
                 continue
 
@@ -179,7 +189,6 @@ def scan_and_stage_csv(file_path: str):
                 "action_taken": "Staged for review"
             })
         except Exception as row_error:
-            # Inline fallback keeps any single broken row from throwing a global 400 Bad Request
             anomaly_report.append({
                 "row_index": row_id, "description": "System Fallback Recovery Line",
                 "type": "PARSING_SKIPPED", "severity": "HIGH", 
