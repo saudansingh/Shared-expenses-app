@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import BASE_URL from './api.js';
 
 export default function App() {
@@ -13,51 +13,63 @@ export default function App() {
   const [selectedAuditUser, setSelectedAuditUser] = useState("Aisha");
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState("");
+  const [initStatus, setInitStatus] = useState("");
 
-const [initStatus, setInitStatus] = useState("");
-
- // Adjust the import path to match your file structure
-
-const handleInitializeGroup = async () => {
-  try {
-    setInitStatus("loading");
-    
-    // Dynamically points to local proxy in dev, or live backend URL in production
-    const response = await fetch(`${BASE_URL}/api/groups/initialize`, { method: 'POST' });
-    const data = await response.json();
-    
-    if (data.status === "success") {
-      setInitStatus("success");
-      alert(data.message);
-    } else {
-      setInitStatus("error");
-      alert("Error initializing database layout: " + data.message);
-    }
-  } catch (err) {
-    setInitStatus("error");
-    console.error("Initialization call failed:", err);
-  }
-};
-
-  // Auto-fetch groups on layout load
-  useEffect(() => {
-    fetchGroups();
-  }, []);
-
-  useEffect(() => {
-    if (selectedGroupId) {
-      fetchFinancialAnalytics();
-    }
-  }, [selectedGroupId]);
-
-  const fetchGroups = async () => {
+  // Memoized fetchGroups to safely structure standard dependency tracking rules
+  const fetchGroups = useCallback(async () => {
     try {
       const res = await fetch(`${API_BASE}/groups`);
       const data = await res.json();
       setGroups(data);
-      if (data.length > 0) setSelectedGroupId(data[0].id);
+      if (data && data.length > 0) {
+        // Keeps selection consistent as a number or string based on API design
+        setSelectedGroupId(data[0].id);
+      }
     } catch (e) {
       console.error("Failed to connect to backend", e);
+    }
+  }, [API_BASE]);
+
+  // Memoized analytics collection to structure dependency safety rules
+  const fetchFinancialAnalytics = useCallback(async () => {
+    if (!selectedGroupId) return;
+    try {
+      const res = await fetch(`${API_BASE}/groups/${selectedGroupId}/balances`);
+      const data = await res.json();
+      setFinancials(data);
+    } catch (err) {
+      console.error("Failed to load ledgers.", err);
+    }
+  }, [API_BASE, selectedGroupId]);
+
+  // Auto-fetch groups on layout load
+  useEffect(() => {
+    fetchGroups();
+  }, [fetchGroups]);
+
+  // Sync balances and ledger updates automatically upon switching group layers
+  useEffect(() => {
+    if (selectedGroupId !== null) {
+      fetchFinancialAnalytics();
+    }
+  }, [selectedGroupId, fetchFinancialAnalytics]);
+
+  const handleInitializeGroup = async () => {
+    try {
+      setInitStatus("loading");
+      const response = await fetch(`${BASE_URL}/groups/initialize`, { method: 'POST' });
+      const data = await response.json();
+      
+      if (data.status === "success") {
+        setInitStatus("success");
+        alert(data.message);
+      } else {
+        setInitStatus("error");
+        alert("Error initializing database layout: " + data.message);
+      }
+    } catch (err) {
+      setInitStatus("error");
+      console.error("Initialization call failed:", err);
     }
   };
 
@@ -71,7 +83,7 @@ const handleInitializeGroup = async () => {
       });
       const newGroup = await res.json();
       setMessage("Standard Group Initialized successfully with active timeline bounds!");
-      fetchGroups();
+      await fetchGroups();
       setSelectedGroupId(newGroup.id);
     } catch (err) {
       setMessage("Failed to construct default operational group bounds.");
@@ -94,17 +106,28 @@ const handleInitializeGroup = async () => {
       if (!res.ok) throw new Error("Parser handling error caught.");
       const data = await res.json();
       setStagedData(data);
-      setMessage(`CSV Ingestion Completed! Caught ${data.summary_report.length} active data anomalies.`);
+      setMessage(`CSV Ingestion Completed! Caught ${data?.summary_report?.length || 0} active data anomalies.`);
     } catch (err) {
       setMessage("CSV Processing Engine failed to complete staging checks safely.");
     }
     setLoading(false);
   };
 
+  // Safe Immutable State Updater for deeply nested records architecture
   const handleUpdateStagedField = (index, field, value) => {
-    const updated = { ...stagedData };
-    updated.records[index][field] = value;
-    setStagedData(updated);
+    if (!stagedData) return;
+    
+    const updatedRecords = stagedData.records.map((rec, idx) => {
+      if (idx === index) {
+        return { ...rec, [field]: value };
+      }
+      return rec;
+    });
+
+    setStagedData({
+      ...stagedData,
+      records: updatedRecords
+    });
   };
 
   const commitApprovedDataToDb = async () => {
@@ -122,23 +145,12 @@ const handleInitializeGroup = async () => {
       const result = await res.json();
       setMessage(result.message);
       setStagedData(null);
-      fetchFinancialAnalytics();
+      await fetchFinancialAnalytics();
       setActiveTab('dashboard');
     } catch (err) {
       setMessage("Transactional commit failed to apply updates safely.");
     }
     setLoading(false);
-  };
-
-  const fetchFinancialAnalytics = async () => {
-    if (!selectedGroupId) return;
-    try {
-      const res = await fetch(`${API_BASE}/groups/${selectedGroupId}/balances`);
-      const data = await res.json();
-      setFinancials(data);
-    } catch (err) {
-      console.error("Failed to load ledgers.", err);
-    }
   };
 
   return (
@@ -157,7 +169,11 @@ const handleInitializeGroup = async () => {
           ) : (
             <select 
               value={selectedGroupId || ""} 
-              onChange={(e) => setSelectedGroupId(Number(e.target.value))}
+              onChange={(e) => {
+                const val = e.target.value;
+                // Coerce back to Number if original ID values evaluate as numeric entities
+                setSelectedGroupId(val === "" ? null : Number(val));
+              }}
               className="bg-indigo-800 text-white border-none rounded px-3 py-1.5 text-sm font-semibold outline-none focus:ring-2 focus:ring-indigo-400"
             >
               {groups.map(g => <option key={g.id} value={g.id}>{g.name}</option>)}
@@ -338,7 +354,6 @@ const handleInitializeGroup = async () => {
           {/* TAB 2: ROHAN'S ITEMIZED AUDIT VIEW */}
           {!loading && activeTab === 'audit' && (
             <div className="space-y-6">
-              {/* Header and User Selector */}
               <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-100">
                 <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-6 border-b border-slate-100 pb-4">
                   <div>
@@ -406,7 +421,6 @@ const handleInitializeGroup = async () => {
           {/* TAB 3: MEERA'S INTERACTIVE IMPORTER STAGING ENGINE */}
           {!loading && activeTab === 'import' && (
             <div className="space-y-6">
-              {/* File Uploader Control Deck */}
               <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-100 text-center">
                 <h3 className="text-sm font-black text-slate-700 tracking-wide mb-2">RAW SOURCE REPOSITORY INGESTION HARNESS</h3>
                 <p className="text-xs text-slate-400 max-w-xl mx-auto mb-4">
@@ -421,12 +435,9 @@ const handleInitializeGroup = async () => {
                 />
               </div>
 
-
-
               <div className="p-4 border border-dashed rounded bg-slate-900 border-slate-700">
                 <div className="flex items-center justify-between mb-4">
                   <h3 className="text-lg font-bold text-sky-400">Database Core Configuration</h3>
-                  
                   <button 
                     onClick={handleInitializeGroup}
                     className={`px-4 py-2 font-semibold text-xs uppercase tracking-wider rounded transition-all duration-150 ${
@@ -441,20 +452,13 @@ const handleInitializeGroup = async () => {
                     {initStatus !== "loading" && initStatus !== "success" && "⚡ Initialize Flat Group Infrastructure"}
                   </button>
                 </div>
-  
-  <p className="text-xs text-slate-400 mb-2">
-    Step 1: Execute infrastructure mapping initialization to pre-seed the target relational tables.
-  </p>
-</div>
-
-
-              
-
-
-
+                <p className="text-xs text-slate-400 mb-2">
+                  Step 1: Execute infrastructure mapping initialization to pre-seed the target relational tables.
+                </p>
+              </div>
 
               {/* Dynamic Staging Report Table Matrix */}
-              {stagedData && (
+              {stagedData?.records && (
                 <div className="bg-white rounded-xl shadow-sm border border-slate-100 overflow-hidden">
                   <div className="bg-slate-900 px-6 py-4 flex flex-col sm:flex-row justify-between items-start sm:items-center text-white space-y-3 sm:space-y-0">
                     <div>
@@ -482,17 +486,17 @@ const handleInitializeGroup = async () => {
                       </thead>
                       <tbody className="divide-y divide-slate-100">
                         {stagedData.records.map((rec, idx) => {
-                          const hasCritical = rec.anomalies.some(a => a.severity === 'CRITICAL');
-                          const hasHigh = rec.anomalies.some(a => a.severity === 'HIGH');
+                          const hasCritical = rec.anomalies?.some(a => a.severity === 'CRITICAL');
+                          const hasHigh = rec.anomalies?.some(a => a.severity === 'HIGH');
                           const rowColor = hasCritical ? 'bg-rose-50/60' : hasHigh ? 'bg-amber-50/40' : 'hover:bg-slate-50/50';
 
                           return (
                             <tr key={idx} className={`${rowColor} transition-all`}>
-                              <td className="py-3 px-4 text-center font-mono text-slate-400 font-bold">{rec.id + 1}</td>
+                              <td className="py-3 px-4 text-center font-mono text-slate-400 font-bold">{idx + 1}</td>
                               <td className="py-2 px-2">
                                 <input 
                                   type="text" 
-                                  value={rec.date} 
+                                  value={rec.date || ""} 
                                   onChange={(e) => handleUpdateStagedField(idx, 'date', e.target.value)}
                                   className="w-full bg-white border border-slate-200 rounded px-2 py-1 font-mono text-xs focus:ring-1 focus:ring-indigo-500 outline-none"
                                 />
@@ -512,13 +516,13 @@ const handleInitializeGroup = async () => {
                               <td className="py-2 px-2">
                                 <input 
                                   type="number" 
-                                  value={rec.amount_in_inr} 
+                                  value={rec.amount_in_inr || 0} 
                                   onChange={(e) => handleUpdateStagedField(idx, 'amount_in_inr', Number(e.target.value))}
                                   className="w-full bg-white border border-slate-200 rounded px-2 py-1 font-mono font-bold text-slate-700 text-xs focus:ring-1 focus:ring-indigo-500 outline-none"
                                 />
                               </td>
                               <td className="py-3 px-4">
-                                {rec.anomalies.length > 0 ? (
+                                {rec.anomalies && rec.anomalies.length > 0 ? (
                                   <div className="space-y-1">
                                     {rec.anomalies.map((anom, aIdx) => (
                                       <span 
